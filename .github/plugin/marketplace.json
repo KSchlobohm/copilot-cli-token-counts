@@ -1,0 +1,19 @@
+{
+  "name": "copilot-token-counts",
+  "metadata": {
+    "description": "Capture billing-relevant token usage for GitHub Copilot CLI sessions.",
+    "version": "1.0.0"
+  },
+  "owner": {
+    "name": "coderandhiker",
+    "email": "copilot-token-counts@users.noreply.github.com"
+  },
+  "plugins": [
+    {
+      "name": "token-counts",
+      "source": "plugins/token-counts",
+      "description": "On sessionEnd, records per-model token usage (fresh/cached/cache-write/output) for the Copilot CLI session into <workspace>/token-usage/<session-id>.json.",
+      "version": "1.0.0"
+    }
+  ]
+}
