@@ -1,61 +1,82 @@
 # copilot-token-counts
 
-A **GitHub Copilot CLI plugin marketplace** that captures billing-relevant token usage for
-each Copilot CLI session.
+A workspace-specific GitHub Copilot CLI hook that automatically captures and records billing-relevant token usage for each session.
 
-This repo is structured as a Copilot CLI plugin marketplace: `.github/plugin/marketplace.json`
-lists the plugins, and each plugin lives under `plugins/<name>/`.
+Unlike global Copilot plugins, this setup is **fully workspace-specific** and **opt-in per repository**. Copilot CLI natively supports repository-level hooks defined in `.github/hooks/`. When you run `copilot` inside this directory, it automatically discovers the hook and runs it when your session ends.
 
-## Plugins
+## Features
 
-| Plugin | Description |
-|--------|-------------|
-| [`token-counts`](plugins/token-counts) | On `sessionEnd`, records per-model token usage (fresh / cached / cache-write / output) for the session into `<workspace>/token-usage/<session-id>.json`. |
+- **Automatic session tracking:** Records per-model token usage (fresh input, cached input, cache write, and output) on `sessionEnd`.
+- **Zero-config installation:** Works immediately when Copilot CLI is launched in this workspace. No global plugins or marketplaces to configure.
+- **Clean output:** Writes a breakdown to `token-usage/<session-id>.json` (or `token-usage/<label>__<session-id>.json` if labeled).
 
-## Install
+## How it Works
 
-In Copilot CLI, use the `/plugin` command to add this marketplace and install the plugin:
+Copilot CLI automatically loads hooks from `.github/hooks/` in your repository. 
 
-```
-/plugin
-```
+1. At `sessionEnd`, Copilot CLI executes `.github/hooks/capture-session-tokens.ps1` via the configuration in `.github/hooks/token-counts.json`.
+2. The script parses the Copilot process-log telemetry for the session and generates a per-model JSON breakdown matching GitHub's billing and pricing columns:
 
-Then add the marketplace by its repository (or local path during development) and install
-`token-counts`. Once installed, the plugin's `sessionEnd` hook is auto-discovered from
-`plugins/token-counts/hooks/hooks.json` and runs at the end of every Copilot CLI session.
-
-> **Scope:** A Copilot CLI plugin is installed once and applies to **all** your CLI sessions.
-> Each session's report is still written into the workspace where that session ran (the hook
-> uses the session `cwd` from its payload), so per-project data stays separated.
+| Field | Pricing Column | Description |
+|---|---|---|
+| `input_tokens_fresh` | Input (fresh, non-cached) | Billed at the standard input rate |
+| `cached_input_tokens` | Cached input | Billed at the cached input rate |
+| `cache_write_tokens` | Cache write | Billed at the cache write rate (Anthropic only) |
+| `output_tokens` | Output | Billed at the standard output rate (includes reasoning) |
 
 ## Layout
 
 ```
 copilot-token-counts/
-├── .github/plugin/marketplace.json     # marketplace manifest (lists plugins)
-├── plugins/
-│   └── token-counts/
-│       ├── hooks/
-│       │   ├── hooks.json              # declares the sessionEnd command hook
-│       │   └── capture-session-tokens.ps1
-│       └── README.md
+├── .github/
+│   └── hooks/
+│       ├── token-counts.json           # declares the sessionEnd hook
+│       └── capture-session-tokens.ps1  # the capture script (self-contained)
+├── .gitignore
 ├── LICENSE
 └── README.md
 ```
 
+## Setup & Usage
+
+To use this in any workspace/repository:
+1. Copy the `.github/hooks/` folder into your repository's root directory.
+2. Ensure you have **PowerShell 7+ (`pwsh`)** on your PATH (the hook invokes `pwsh`).
+3. Run `copilot` normally. Upon exit, your token usage report will be saved to `<workspace>/token-usage/<session-id>.json`.
+
+### Labeled / Named Sessions (e.g., for Workshops)
+
+To organize reports into sortable steps, set the `$env:COPILOT_TOKEN_USAGE_LABEL` variable **before launching `copilot`**:
+
+```powershell
+$env:COPILOT_TOKEN_USAGE_LABEL = "01-clone-repo"
+copilot
+# ...run the step, then exit...
+
+$env:COPILOT_TOKEN_USAGE_LABEL = "02-add-tests"
+copilot
+```
+
+This creates:
+```
+token-usage/
+  01-clone-repo__<session-id>.json
+  02-add-tests__<session-id>.json
+```
+
+### Manual / Backfill Run
+
+To manually generate a report for a past session (or to run backfills):
+
+```powershell
+pwsh -NoProfile -File .github/hooks/capture-session-tokens.ps1 -SessionId <session-guid> -Json
+```
+
 ## Requirements
 
-- **GitHub Copilot CLI** with plugin support.
-- **PowerShell 7+ (`pwsh`)** on PATH (the hook runs `pwsh`).
-
-## Caveat
-
-GitHub's official plugin collection currently lists hooks as *"coming soon,"* and plugin-hook
-working-directory resolution is not fully documented. This plugin is built to the published
-[hooks reference](https://docs.github.com/en/copilot/reference/hooks-reference) spec; if a CLI
-version resolves plugin paths differently, adjust the script path in
-`plugins/token-counts/hooks/hooks.json`. See the [plugin README](plugins/token-counts/README.md)
-for details.
+- **GitHub Copilot CLI** with local hook support.
+- **PowerShell 7+ (`pwsh`)** installed on PATH.
+- Access to global logs at `~/.copilot/logs` (or `$env:COPILOT_HOME/logs`).
 
 ## License
 

@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionEnd": [
+      {
+        "type": "command",
+        "powershell": "pwsh -NoProfile -ExecutionPolicy Bypass -File \".github/hooks/capture-session-tokens.ps1\"",
+        "bash": "pwsh -NoProfile -File \".github/hooks/capture-session-tokens.ps1\"",
+        "timeoutSec": 30
+      }
+    ]
+  }
+}

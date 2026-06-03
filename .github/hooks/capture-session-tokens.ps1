@@ -99,6 +99,21 @@
          (so a globally-installed plugin writes into whichever workspace the session ran in)
       4. <current directory>\token-usage
 
+.PARAMETER Label
+    Optional human-meaningful label baked into the output filename, for correlating sessions
+    to (for example) the ordered steps of a workshop. Resolution order:
+      1. -Label parameter
+      2. $env:COPILOT_TOKEN_USAGE_LABEL
+    The label is sanitized for filesystem safety (invalid characters and whitespace become
+    '-'). The report filename is then:
+        <label>__<session-id>.json   when a label is present
+        <session-id>.json            when no label is present (unchanged default)
+    The session-id is always included so files stay unique even if two sessions share a label
+    or a step is re-run. Because the env var is read from the hook's process environment, set
+    it in your shell BEFORE launching `copilot` (a process's environment is captured at
+    launch); the CLI then passes it through to the hook. For a workshop, number the labels
+    (e.g. "01-clone", "02-add-tests") so the files sort in step order.
+
 .PARAMETER MaxWaitSeconds
     Upper bound (seconds) on how long to wait for the final turn's telemetry to be flushed
     to the log before writing the report. Default 12. Stays well under the hook's timeout.
@@ -118,17 +133,18 @@
     Also emit the report JSON to stdout (in addition to writing the file).
 
 .EXAMPLE
-    # As a Copilot CLI plugin hook (declared in the plugin's hooks/hooks.json) — reads the
+    # As a workspace-specific hook (declared in .github/hooks/token-counts.json) — reads the
     # sessionId AND the session cwd from the hook payload on stdin.
 
 .EXAMPLE
     # Manual / backfill run for a known session:
-    pwsh -NoProfile -File capture-session-tokens.ps1 -SessionId <session-guid> -Json
+    pwsh -NoProfile -File .github/hooks/capture-session-tokens.ps1 -SessionId <session-guid> -Json
 #>
 param(
     [string]$SessionId,
     [string]$LogDir,
     [string]$OutDir,
+    [string]$Label,
     [int]$MaxWaitSeconds = 12,
     [double]$StableSeconds = 2,
     [double]$PollSeconds = 0.5,
@@ -141,6 +157,27 @@ $ErrorActionPreference = "Stop"
 function Get-CopilotHome {
     if ($env:COPILOT_HOME) { return $env:COPILOT_HOME }
     return (Join-Path $env:USERPROFILE ".copilot")
+}
+
+# Turn an arbitrary label into a filesystem-safe token: invalid filename characters and
+# whitespace become '-', runs of '-' collapse, and leading/trailing '-' are trimmed.
+function Get-SafeLabel {
+    param([string]$Label)
+    if (-not $Label) { return $null }
+    $Label = $Label.Trim()
+    if (-not $Label) { return $null }
+    $invalid = [System.IO.Path]::GetInvalidFileNameChars()
+    $sb = New-Object System.Text.StringBuilder
+    foreach ($ch in $Label.ToCharArray()) {
+        if (($invalid -contains $ch) -or [char]::IsWhiteSpace($ch)) {
+            [void]$sb.Append('-')
+        } else {
+            [void]$sb.Append($ch)
+        }
+    }
+    $s = ($sb.ToString() -replace '-{2,}', '-').Trim('-')
+    if (-not $s) { return $null }
+    return $s
 }
 
 # --- Resolve sessionId and session cwd: prefer parameter, else read hook payload from stdin ---
@@ -179,6 +216,10 @@ if (-not $OutDir) {
         $OutDir = Join-Path (Get-Location).Path "token-usage"
     }
 }
+
+# Resolve an optional human-meaningful label for the filename: prefer the parameter, else env.
+if (-not $Label) { $Label = $env:COPILOT_TOKEN_USAGE_LABEL }
+$SafeLabel = Get-SafeLabel $Label
 
 if (-not (Test-Path $LogDir)) {
     Write-Warning "capture-session-tokens: log directory not found: $LogDir"
@@ -299,6 +340,7 @@ $report = [ordered]@{
     generated_at     = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
     cli_version_note = "Field layout verified against Copilot CLI v1.0.57; re-verify if your /version differs."
     session_id       = $SessionId
+    label            = $SafeLabel
     field_meaning    = [ordered]@{
         input_tokens_fresh  = "Billed at the model's 'Input' rate (fresh, non-cached input)."
         cached_input_tokens = "Billed at the model's 'Cached input' rate."
@@ -313,12 +355,14 @@ $report = [ordered]@{
 
 # --- Write report ---
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
-$outPath = Join-Path $OutDir ("{0}.json" -f $SessionId)
+$fileName = if ($SafeLabel) { "{0}__{1}.json" -f $SafeLabel, $SessionId } else { "{0}.json" -f $SessionId }
+$outPath = Join-Path $OutDir $fileName
 $report | ConvertTo-Json -Depth 8 | Set-Content -Path $outPath -Encoding UTF8
 
 # --- Human-readable summary to stderr (so it never pollutes hook stdout JSON contract) ---
 $summary = New-Object System.Text.StringBuilder
-[void]$summary.AppendLine("Copilot CLI token usage  (session $SessionId)")
+$headerLabel = if ($SafeLabel) { "label $SafeLabel, " } else { "" }
+[void]$summary.AppendLine("Copilot CLI token usage  ($headerLabel`session $SessionId)")
 [void]$summary.AppendLine(("{0,-30} {1,6} {2,14} {3,14} {4,14} {5,12}" -f "model","calls","input_fresh","input_cached","cache_write","output"))
 foreach ($r in $models) {
     [void]$summary.AppendLine(("{0,-30} {1,6} {2,14} {3,14} {4,14} {5,12}" -f `
