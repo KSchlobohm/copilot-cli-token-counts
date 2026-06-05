@@ -8,7 +8,8 @@ Unlike global Copilot plugins, this setup is **fully workspace-specific** and **
 
 - **Automatic session tracking:** Records per-model token usage (fresh input, cached input, cache write, and output) on `sessionEnd`.
 - **Zero-config installation:** Works immediately when Copilot CLI is launched in this workspace. No global plugins or marketplaces to configure.
-- **Clean output:** Writes a breakdown to `token-usage/<session-id>.json` (or `token-usage/<label>__<session-id>.json` if labeled).
+- **Clean output:** Writes a breakdown to `token-usage/<session-id>.json`, or prefixes the file with either your explicit label or the Copilot-assigned session name when available.
+- **Failure-focused diagnostics:** Writes `token-usage/<session-id>.err.log` only when the hook records warnings or recoverable errors.
 
 ## How it Works
 
@@ -42,7 +43,7 @@ copilot-token-counts/
 To use this in any workspace/repository:
 1. Copy the `.github/hooks/` folder into your repository's root directory.
 2. Ensure you have **PowerShell 7+ (`pwsh`)** on your PATH (the hook invokes `pwsh`).
-3. Run `copilot` normally. Upon exit, your token usage report will be saved to `<workspace>/token-usage/<session-id>.json`.
+3. Run `copilot` normally. Upon exit, your token usage report will be saved to `<workspace>/token-usage/<session-id>.json`, unless a label or session name is available to prefix it.
 
 ### Labeled / Named Sessions (e.g., for Workshops)
 
@@ -62,6 +63,13 @@ This creates:
 token-usage/
   01-clone-repo__<session-id>.json
   02-add-tests__<session-id>.json
+```
+
+If you do not set `COPILOT_TOKEN_USAGE_LABEL`, the hook falls back to the Copilot CLI session name when one exists. For example, a session named `Review Hook and Script` will produce:
+
+```
+token-usage/
+  Review-Hook-and-Script__<session-id>.json
 ```
 
 ### Manual / Backfill Run
