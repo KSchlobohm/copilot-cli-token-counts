@@ -9,6 +9,7 @@ Unlike global Copilot plugins, this setup is **fully workspace-specific** and **
 - **Automatic session tracking:** Records per-model token usage (fresh input, cached input, cache write, and output) on `sessionEnd`.
 - **Zero-config installation:** Works immediately when Copilot CLI is launched in this workspace. No global plugins or marketplaces to configure.
 - **Clean output:** Writes a breakdown to `token-usage/<session-id>.json`, or prefixes the file with either your explicit label or the Copilot-assigned session name when available.
+- **Failure-focused diagnostics:** Writes `token-usage/<session-id>.err.log` only when the hook records warnings or recoverable errors.
 
 ## How it Works
 

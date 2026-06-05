@@ -154,10 +154,47 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$script:SessionIssues = New-Object System.Collections.Generic.List[string]
 
 function Get-CopilotHome {
     if ($env:COPILOT_HOME) { return $env:COPILOT_HOME }
     return (Join-Path $env:USERPROFILE ".copilot")
+}
+
+function Add-SessionIssue {
+    param(
+        [string]$Message,
+        [switch]$EmitWarning
+    )
+
+    $entry = "{0} {1}" -f (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ"), $Message
+    [void]$script:SessionIssues.Add($entry)
+
+    if ($EmitWarning) {
+        Write-Warning $Message
+    }
+}
+
+function Write-SessionIssueLog {
+    param(
+        [string]$OutDir,
+        [string]$SessionId
+    )
+
+    if (-not $SessionId -or -not $OutDir -or $script:SessionIssues.Count -eq 0) {
+        return
+    }
+
+    New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+    $errPath = Join-Path $OutDir ("{0}.err.log" -f $SessionId)
+    $content = ($script:SessionIssues -join [Environment]::NewLine) + [Environment]::NewLine
+    Set-Content -Path $errPath -Value $content -Encoding UTF8
+}
+
+trap {
+    Add-SessionIssue -Message ("capture-session-tokens: unhandled error: {0}" -f $PSItem.Exception.Message) -EmitWarning
+    Write-SessionIssueLog -OutDir $OutDir -SessionId $SessionId
+    throw
 }
 
 # Turn an arbitrary label into a filesystem-safe token: invalid filename characters and
@@ -203,12 +240,14 @@ function Get-SessionCandidateLogs {
     Get-ChildItem -Path $LogDir -Filter "process-*.log" -File -ErrorAction SilentlyContinue |
         Sort-Object LastWriteTimeUtc -Descending:$sortDirection |
         ForEach-Object {
+            $logFile = $_
             try {
-                if (Select-String -Path $_.FullName -Pattern $SessionId -SimpleMatch -Quiet) {
-                    [void]$candidateLogs.Add($_)
+                if (Select-String -Path $logFile.FullName -Pattern $SessionId -SimpleMatch -Quiet) {
+                    [void]$candidateLogs.Add($logFile)
                 }
             } catch {
                 # Candidate-log discovery is best-effort; skip files that are unavailable mid-scan.
+                Add-SessionIssue -Message ("capture-session-tokens: skipping candidate log '{0}': {1}" -f $logFile.FullName, $PSItem.Exception.Message)
             }
         }
 
@@ -226,6 +265,7 @@ function Get-SessionNameLabel {
             $lines = Get-Content -Path $log.FullName
         } catch {
             # Session-name lookup is best-effort only; log access issues must not block report capture.
+            Add-SessionIssue -Message ("capture-session-tokens: could not read session-name log '{0}': {1}" -f $log.FullName, $PSItem.Exception.Message)
             continue
         }
         $sessionStarts = New-Object System.Collections.Generic.List[int]
@@ -293,13 +333,14 @@ if (-not $SessionId) {
             if ($payload.cwd)            { $SessionCwd = [string]$payload.cwd }
         } catch {
             # Hook fired with unexpected/empty stdin; fail open so we never block the CLI.
-            Write-Warning "capture-session-tokens: could not parse hook payload: $_"
+            Add-SessionIssue -Message ("capture-session-tokens: could not parse hook payload: {0}" -f $PSItem.Exception.Message) -EmitWarning
         }
     }
 }
 
 if (-not $SessionId) {
-    Write-Warning "capture-session-tokens: no sessionId provided or found on stdin; nothing to do."
+    Add-SessionIssue -Message "capture-session-tokens: no sessionId provided or found on stdin; nothing to do." -EmitWarning
+    Write-SessionIssueLog -OutDir $OutDir -SessionId $SessionId
     exit 0
 }
 
@@ -316,7 +357,8 @@ if (-not $OutDir) {
 }
 
 if (-not (Test-Path $LogDir)) {
-    Write-Warning "capture-session-tokens: log directory not found: $LogDir"
+    Add-SessionIssue -Message ("capture-session-tokens: log directory not found: {0}" -f $LogDir) -EmitWarning
+    Write-SessionIssueLog -OutDir $OutDir -SessionId $SessionId
     exit 0
 }
 
@@ -351,6 +393,7 @@ function Get-SessionUsageEvents {
                 $lines = Get-Content -Path $path
             } catch {
                 # Usage capture is best-effort across logs; skip files that become unavailable mid-scan.
+                Add-SessionIssue -Message ("capture-session-tokens: could not read usage log '{0}': {1}" -f $path, $PSItem.Exception.Message)
                 return
             }
             foreach ($b in (Get-TelemetryBlocks $lines)) {
@@ -459,6 +502,7 @@ New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 $fileName = if ($SafeLabel) { "{0}__{1}.json" -f $SafeLabel, $SessionId } else { "{0}.json" -f $SessionId }
 $outPath = Join-Path $OutDir $fileName
 $report | ConvertTo-Json -Depth 8 | Set-Content -Path $outPath -Encoding UTF8
+Write-SessionIssueLog -OutDir $OutDir -SessionId $SessionId
 
 # --- Human-readable summary to stderr (so it never pollutes hook stdout JSON contract) ---
 $summary = New-Object System.Text.StringBuilder
