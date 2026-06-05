@@ -104,10 +104,11 @@
     to (for example) the ordered steps of a workshop. Resolution order:
       1. -Label parameter
       2. $env:COPILOT_TOKEN_USAGE_LABEL
+      3. Copilot CLI's assigned session name, read from the current session's process log
     The label is sanitized for filesystem safety (invalid characters and whitespace become
     '-'). The report filename is then:
         <label>__<session-id>.json   when a label is present
-        <session-id>.json            when no label is present (unchanged default)
+        <session-id>.json            when no label can be resolved
     The session-id is always included so files stay unique even if two sessions share a label
     or a step is re-run. Because the env var is read from the hook's process environment, set
     it in your shell BEFORE launching `copilot` (a process's environment is captured at
@@ -180,6 +181,85 @@ function Get-SafeLabel {
     return $s
 }
 
+function Get-ExplicitLabel {
+    param([string]$Label)
+    return (Get-SafeLabel $Label)
+}
+
+function Get-EnvironmentLabel {
+    return (Get-SafeLabel $env:COPILOT_TOKEN_USAGE_LABEL)
+}
+
+function Get-SessionNameLabel {
+    param(
+        [string]$SessionId,
+        [string]$LogDir
+    )
+
+    $logs = @(Get-ChildItem -Path $LogDir -Filter "process-*.log" -File -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTimeUtc -Descending)
+
+    foreach ($log in $logs) {
+        try {
+            if (-not (Select-String -Path $log.FullName -Pattern $SessionId -SimpleMatch -Quiet)) {
+                continue
+            }
+
+            $lines = Get-Content -Path $log.FullName
+        } catch {
+            # Session-name lookup is best-effort only; log access issues must not block report capture.
+            continue
+        }
+        $sessionStarts = New-Object System.Collections.Generic.List[int]
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -like "*Workspace initialized: $SessionId*") {
+                [void]$sessionStarts.Add($i)
+            }
+        }
+
+        for ($startIndexIdx = $sessionStarts.Count - 1; $startIndexIdx -ge 0; $startIndexIdx--) {
+            $startIndex = $sessionStarts[$startIndexIdx]
+            $endIndex = $lines.Count - 1
+            for ($i = $startIndex + 1; $i -lt $lines.Count; $i++) {
+                if ($lines[$i] -like "*Workspace initialized:*") {
+                    $endIndex = $i - 1
+                    break
+                }
+            }
+
+            for ($i = $endIndex; $i -ge $startIndex; $i--) {
+                if ($lines[$i] -match 'Session named: "(?<name>[^"]+)"') {
+                    return (Get-SafeLabel $matches.name)
+                }
+                if ($lines[$i] -match 'Generated session name: "(?<name>[^"]+)"') {
+                    return (Get-SafeLabel $matches.name)
+                }
+                if ($lines[$i] -match '<session-title>(?<name>[^<]+)</session-title>') {
+                    return (Get-SafeLabel $matches.name)
+                }
+            }
+        }
+    }
+
+    return $null
+}
+
+function Resolve-OutputLabel {
+    param(
+        [string]$Label,
+        [string]$SessionId,
+        [string]$LogDir
+    )
+
+    $safeLabel = Get-ExplicitLabel $Label
+    if ($safeLabel) { return $safeLabel }
+
+    $safeLabel = Get-EnvironmentLabel
+    if ($safeLabel) { return $safeLabel }
+
+    return (Get-SessionNameLabel -SessionId $SessionId -LogDir $LogDir)
+}
+
 # --- Resolve sessionId and session cwd: prefer parameter, else read hook payload from stdin ---
 $SessionCwd = $null
 if (-not $SessionId) {
@@ -217,14 +297,14 @@ if (-not $OutDir) {
     }
 }
 
-# Resolve an optional human-meaningful label for the filename: prefer the parameter, else env.
-if (-not $Label) { $Label = $env:COPILOT_TOKEN_USAGE_LABEL }
-$SafeLabel = Get-SafeLabel $Label
-
 if (-not (Test-Path $LogDir)) {
     Write-Warning "capture-session-tokens: log directory not found: $LogDir"
     exit 0
 }
+
+# Resolve an optional human-meaningful label for the filename: prefer the parameter, else env,
+# else the Copilot-assigned session name already recorded in the process log.
+$SafeLabel = Resolve-OutputLabel -Label $Label -SessionId $SessionId -LogDir $LogDir
 
 # --- Extract pretty-printed telemetry JSON objects following a 'cli.telemetry:' marker ---
 function Get-TelemetryBlocks {
