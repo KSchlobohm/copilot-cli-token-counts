@@ -302,10 +302,6 @@ if (-not (Test-Path $LogDir)) {
     exit 0
 }
 
-# Resolve an optional human-meaningful label for the filename: prefer the parameter, else env,
-# else the Copilot-assigned session name already recorded in the process log.
-$SafeLabel = Resolve-OutputLabel -Label $Label -SessionId $SessionId -LogDir $LogDir
-
 # --- Extract pretty-printed telemetry JSON objects following a 'cli.telemetry:' marker ---
 function Get-TelemetryBlocks {
     param([string[]]$Lines)
@@ -369,6 +365,10 @@ if (-not $NoWait) {
         }
     }
 }
+
+# Resolve an optional human-meaningful label for the filename: prefer the parameter, else env,
+# else the Copilot-assigned session name after the log settle wait has had time to flush it.
+$SafeLabel = Resolve-OutputLabel -Label $Label -SessionId $SessionId -LogDir $LogDir
 
 # --- Aggregate per model ---
 $byModel = @{}
