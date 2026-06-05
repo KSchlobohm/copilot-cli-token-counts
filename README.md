@@ -80,6 +80,18 @@ To manually generate a report for a past session (or to run backfills):
 pwsh -NoProfile -File .github/hooks/capture-session-tokens.ps1 -SessionId <session-guid> -Json
 ```
 
+### Script Fingerprint
+
+To quickly check whether two copies of the hook script are the same, print the script's
+version and a normalized SHA-256 fingerprint:
+
+```powershell
+pwsh -NoProfile -File .github/hooks/capture-session-tokens.ps1 -Fingerprint
+```
+
+The fingerprint normalizes line endings before hashing, so the same script still compares
+equal when one folder has CRLF and the other has LF.
+
 ## Requirements
 
 - **GitHub Copilot CLI** with local hook support.
