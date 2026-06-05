@@ -133,6 +133,11 @@
 .PARAMETER Json
     Also emit the report JSON to stdout (in addition to writing the file).
 
+.PARAMETER Fingerprint
+    Emit a compact JSON fingerprint for this script and exit. The hash is computed from the
+    script text after normalizing line endings to LF so the same script compares equal across
+    folders even when one copy uses CRLF and the other uses LF.
+
 .EXAMPLE
     # As a workspace-specific hook (declared in .github/hooks/token-counts.json) — reads the
     # sessionId AND the session cwd from the hook payload on stdin.
@@ -140,6 +145,10 @@
 .EXAMPLE
     # Manual / backfill run for a known session:
     pwsh -NoProfile -File .github/hooks/capture-session-tokens.ps1 -SessionId <session-guid> -Json
+
+.EXAMPLE
+    # Print a version + fingerprint that you can compare across two folders:
+    pwsh -NoProfile -File .github/hooks/capture-session-tokens.ps1 -Fingerprint
 #>
 param(
     [string]$SessionId,
@@ -150,8 +159,27 @@ param(
     [double]$StableSeconds = 2,
     [double]$PollSeconds = 0.5,
     [switch]$NoWait,
-    [switch]$Json
+    [switch]$Json,
+    [switch]$Fingerprint
 )
+
+$CaptureSessionTokensScriptVersion = "1.1.0"
+
+function Get-NormalizedScriptSha256 {
+    param([string]$Path)
+
+    $content = Get-Content -Path $Path -Raw
+    $normalizedContent = $content.Replace("`r`n", "`n").Replace("`r", "`n")
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($normalizedContent)
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $hashBytes = $sha256.ComputeHash($bytes)
+    } finally {
+        $sha256.Dispose()
+    }
+
+    return ([System.Convert]::ToHexString($hashBytes).ToLowerInvariant())
+}
 
 $ErrorActionPreference = "Stop"
 $script:SessionIssues = New-Object System.Collections.Generic.List[string]
@@ -189,6 +217,21 @@ function Write-SessionIssueLog {
     $errPath = Join-Path $OutDir ("{0}.err.log" -f $SessionId)
     $content = ($script:SessionIssues -join [Environment]::NewLine) + [Environment]::NewLine
     Set-Content -Path $errPath -Value $content -Encoding UTF8
+}
+
+if ($Fingerprint) {
+    $selfPath = if ($PSCommandPath) { $PSCommandPath } else { $MyInvocation.MyCommand.Path }
+    if (-not $selfPath) {
+        [Console]::Error.WriteLine("capture-session-tokens: script path is unavailable; run this script with -File.")
+        exit 1
+    }
+
+    $fingerprintInfo = [ordered]@{
+        script_version = $CaptureSessionTokensScriptVersion
+        content_sha256 = Get-NormalizedScriptSha256 -Path $selfPath
+    }
+    $fingerprintInfo | ConvertTo-Json -Compress
+    exit 0
 }
 
 trap {
