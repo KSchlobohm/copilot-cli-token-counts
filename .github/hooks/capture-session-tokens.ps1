@@ -190,21 +190,39 @@ function Get-EnvironmentLabel {
     return (Get-SafeLabel $env:COPILOT_TOKEN_USAGE_LABEL)
 }
 
+function Get-SessionCandidateLogs {
+    param(
+        [string]$SessionId,
+        [string]$LogDir,
+        [switch]$Descending
+    )
+
+    $sortDirection = if ($Descending) { $true } else { $false }
+    $candidateLogs = New-Object System.Collections.Generic.List[object]
+
+    Get-ChildItem -Path $LogDir -Filter "process-*.log" -File -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTimeUtc -Descending:$sortDirection |
+        ForEach-Object {
+            try {
+                if (Select-String -Path $_.FullName -Pattern $SessionId -SimpleMatch -Quiet) {
+                    [void]$candidateLogs.Add($_)
+                }
+            } catch {
+                # Candidate-log discovery is best-effort; skip files that are unavailable mid-scan.
+            }
+        }
+
+    return $candidateLogs.ToArray()
+}
+
 function Get-SessionNameLabel {
     param(
         [string]$SessionId,
-        [string]$LogDir
+        [object[]]$CandidateLogs
     )
 
-    $logs = @(Get-ChildItem -Path $LogDir -Filter "process-*.log" -File -ErrorAction SilentlyContinue |
-        Sort-Object LastWriteTimeUtc -Descending)
-
-    foreach ($log in $logs) {
+    foreach ($log in ($CandidateLogs | Sort-Object LastWriteTimeUtc -Descending)) {
         try {
-            if (-not (Select-String -Path $log.FullName -Pattern $SessionId -SimpleMatch -Quiet)) {
-                continue
-            }
-
             $lines = Get-Content -Path $log.FullName
         } catch {
             # Session-name lookup is best-effort only; log access issues must not block report capture.
@@ -248,7 +266,7 @@ function Resolve-OutputLabel {
     param(
         [string]$Label,
         [string]$SessionId,
-        [string]$LogDir
+        [object[]]$CandidateLogs
     )
 
     $safeLabel = Get-ExplicitLabel $Label
@@ -257,7 +275,7 @@ function Resolve-OutputLabel {
     $safeLabel = Get-EnvironmentLabel
     if ($safeLabel) { return $safeLabel }
 
-    return (Get-SessionNameLabel -SessionId $SessionId -LogDir $LogDir)
+    return (Get-SessionNameLabel -SessionId $SessionId -CandidateLogs $CandidateLogs)
 }
 
 # --- Resolve sessionId and session cwd: prefer parameter, else read hook payload from stdin ---
@@ -322,18 +340,19 @@ function Get-TelemetryBlocks {
     return $blocks
 }
 
-# --- Collect this session's assistant_usage events across all logs, de-duped by event_id ---
+# --- Collect this session's assistant_usage events from a candidate log set, de-duped by event_id ---
 function Get-SessionUsageEvents {
-    param([string]$LogDir, [string]$SessionId)
+    param([object[]]$CandidateLogs, [string]$SessionId)
     $seen = New-Object System.Collections.Generic.HashSet[string]
     $events = New-Object System.Collections.Generic.List[object]
-    Get-ChildItem -Path $LogDir -Filter "process-*.log" -File -ErrorAction SilentlyContinue |
-        Sort-Object LastWriteTime |
-        ForEach-Object {
+    $CandidateLogs | ForEach-Object {
             $path = $_.FullName
-            # Cheap pre-filter: only fully parse logs that mention this session.
-            if (-not (Select-String -Path $path -Pattern $SessionId -SimpleMatch -Quiet)) { return }
-            $lines = Get-Content -Path $path
+            try {
+                $lines = Get-Content -Path $path
+            } catch {
+                # Usage capture is best-effort across logs; skip files that become unavailable mid-scan.
+                return
+            }
             foreach ($b in (Get-TelemetryBlocks $lines)) {
                 if ($b.kind -ne 'assistant_usage') { continue }
                 if ($b.session_id -ne $SessionId)  { continue }
@@ -349,14 +368,16 @@ function Get-SessionUsageEvents {
 # second or two after sessionEnd fires. Poll until the event count settles (no growth for
 # StableSeconds) or MaxWaitSeconds elapses, so we don't write a report that misses the last
 # turn (or, for a single-turn session, reports all zeros).
-$events = Get-SessionUsageEvents -LogDir $LogDir -SessionId $SessionId
+$candidateLogs = Get-SessionCandidateLogs -LogDir $LogDir -SessionId $SessionId
+$events = Get-SessionUsageEvents -CandidateLogs $candidateLogs -SessionId $SessionId
 if (-not $NoWait) {
     $deadline    = (Get-Date).AddSeconds($MaxWaitSeconds)
     $lastCount   = $events.Count
     $stableSince = Get-Date
     while ((Get-Date) -lt $deadline) {
         Start-Sleep -Seconds $PollSeconds
-        $events = Get-SessionUsageEvents -LogDir $LogDir -SessionId $SessionId
+        $candidateLogs = Get-SessionCandidateLogs -LogDir $LogDir -SessionId $SessionId
+        $events = Get-SessionUsageEvents -CandidateLogs $candidateLogs -SessionId $SessionId
         if ($events.Count -ne $lastCount) {
             $lastCount   = $events.Count
             $stableSince = Get-Date
@@ -368,7 +389,7 @@ if (-not $NoWait) {
 
 # Resolve an optional human-meaningful label for the filename: prefer the parameter, else env,
 # else the Copilot-assigned session name after the log settle wait has had time to flush it.
-$SafeLabel = Resolve-OutputLabel -Label $Label -SessionId $SessionId -LogDir $LogDir
+$SafeLabel = Resolve-OutputLabel -Label $Label -SessionId $SessionId -CandidateLogs $candidateLogs
 
 # --- Aggregate per model ---
 $byModel = @{}
