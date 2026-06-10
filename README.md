@@ -7,6 +7,7 @@ Unlike global Copilot plugins, this setup is **fully workspace-specific** and **
 ## Features
 
 - **Automatic session tracking:** Records per-model token usage (fresh input, cached input, cache write, and output) on `sessionEnd`.
+- **Informational request details:** Captures `reasoning_effort` alongside token totals so you can correlate token usage with model effort settings.
 - **Zero-config installation:** Works immediately when Copilot CLI is launched in this workspace. No global plugins or marketplaces to configure.
 - **Clean output:** Writes a breakdown to `token-usage/<session-id>.json`, or prefixes the file with either your explicit label or the Copilot-assigned session name when available.
 - **Failure-focused diagnostics:** Writes `token-usage/<session-id>.err.log` only when the hook records warnings or recoverable errors.
@@ -24,6 +25,13 @@ Copilot CLI automatically loads hooks from `.github/hooks/` in your repository.
 | `cached_input_tokens` | Cached input | Billed at the cached input rate |
 | `cache_write_tokens` | Cache write | Billed at the cache write rate (Anthropic only) |
 | `output_tokens` | Output | Billed at the standard output rate (includes reasoning) |
+
+It also records informational metadata that helps explain how the tokens were produced:
+
+| Field | Description |
+|---|---|
+| `reasoning_effort` | The normalized `assistant_usage.properties.reasoning_effort` value for a model, or `mixed` when the session used multiple effort levels |
+| `effort_breakdown` | A per-effort count of API calls, at both the session totals level and for each model |
 
 ## Layout
 
