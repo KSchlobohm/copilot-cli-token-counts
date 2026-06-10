@@ -163,7 +163,7 @@ param(
     [switch]$Fingerprint
 )
 
-$CaptureSessionTokensScriptVersion = "1.1.0"
+$CaptureSessionTokensScriptVersion = "1.2.0"
 
 function Get-NormalizedScriptSha256 {
     param([string]$Path)
@@ -217,6 +217,44 @@ function Write-SessionIssueLog {
     $errPath = Join-Path $OutDir ("{0}.err.log" -f $SessionId)
     $content = ($script:SessionIssues -join [Environment]::NewLine) + [Environment]::NewLine
     Set-Content -Path $errPath -Value $content -Encoding UTF8
+}
+
+function Get-NormalizedReasoningEffort {
+    param([object]$ReasoningEffort)
+
+    $value = [string]$ReasoningEffort
+    if ([string]::IsNullOrWhiteSpace($value)) {
+        return "unspecified"
+    }
+
+    return $value.Trim().ToLowerInvariant()
+}
+
+function Add-CountValue {
+    param(
+        [System.Collections.Specialized.OrderedDictionary]$Counts,
+        [string]$Key
+    )
+
+    if (-not $Counts.Contains($Key)) {
+        $Counts[$Key] = 0
+    }
+
+    $Counts[$Key] += 1
+}
+
+function Get-EffortSummaryValue {
+    param([System.Collections.Specialized.OrderedDictionary]$Counts)
+
+    if (-not $Counts -or $Counts.Count -eq 0) {
+        return "unspecified"
+    }
+
+    if ($Counts.Count -eq 1) {
+        return [string]$Counts.Keys[0]
+    }
+
+    return "mixed"
 }
 
 if ($Fingerprint) {
@@ -479,6 +517,7 @@ $SafeLabel = Resolve-OutputLabel -Label $Label -SessionId $SessionId -CandidateL
 
 # --- Aggregate per model ---
 $byModel = @{}
+$effortBreakdown = [ordered]@{}
 foreach ($e in $events) {
     $model = [string]$e.properties.model
     if (-not $model) { $model = "unknown" }
@@ -492,9 +531,12 @@ foreach ($e in $events) {
             cache_write_tokens    = 0   # metrics.cache_write_tokens      -> "Cache write" (Anthropic)
             output_tokens         = 0   # metrics.output_tokens           -> "Output" rate
             reasoning_tokens      = 0   # informational; included within output_tokens
+            reasoning_effort      = "unspecified"
+            effort_breakdown      = [ordered]@{}
         }
     }
     $m = $e.metrics
+    $effort = Get-NormalizedReasoningEffort -ReasoningEffort $e.properties.reasoning_effort
     $byModel[$model].api_calls           += 1
     $byModel[$model].input_tokens_total  += [long]$m.input_tokens
     $byModel[$model].input_tokens_fresh  += [long]$m.input_tokens_uncached
@@ -502,6 +544,12 @@ foreach ($e in $events) {
     $byModel[$model].cache_write_tokens  += [long]$m.cache_write_tokens
     $byModel[$model].output_tokens       += [long]$m.output_tokens
     $byModel[$model].reasoning_tokens    += [long]$m.reasoning_tokens
+    Add-CountValue -Counts $byModel[$model].effort_breakdown -Key $effort
+    Add-CountValue -Counts $effortBreakdown -Key $effort
+}
+
+foreach ($row in $byModel.Values) {
+    $row.reasoning_effort = Get-EffortSummaryValue -Counts $row.effort_breakdown
 }
 
 $models = @($byModel.Values | Sort-Object { $_.input_tokens_total } -Descending)
@@ -520,6 +568,7 @@ $totals = [ordered]@{
     cache_write_tokens  = Sum-Key $models 'cache_write_tokens'
     output_tokens       = Sum-Key $models 'output_tokens'
     reasoning_tokens    = Sum-Key $models 'reasoning_tokens'
+    effort_breakdown    = $effortBreakdown
 }
 
 $report = [ordered]@{
@@ -535,6 +584,8 @@ $report = [ordered]@{
         output_tokens       = "Billed at the model's 'Output' rate (includes reasoning tokens)."
         reasoning_tokens    = "Informational only; already counted within output_tokens."
         input_tokens_total  = "fresh + cached input; informational."
+        reasoning_effort    = "Informational only; copied from assistant_usage.properties.reasoning_effort."
+        effort_breakdown    = "Informational only; count of API calls grouped by reasoning_effort."
     }
     totals           = $totals
     by_model         = $models
@@ -551,13 +602,13 @@ Write-SessionIssueLog -OutDir $OutDir -SessionId $SessionId
 $summary = New-Object System.Text.StringBuilder
 $headerLabel = if ($SafeLabel) { "label $SafeLabel, " } else { "" }
 [void]$summary.AppendLine("Copilot CLI token usage  ($headerLabel`session $SessionId)")
-[void]$summary.AppendLine(("{0,-30} {1,6} {2,14} {3,14} {4,14} {5,12}" -f "model","calls","input_fresh","input_cached","cache_write","output"))
+[void]$summary.AppendLine(("{0,-30} {1,6} {2,12} {3,14} {4,14} {5,14} {6,12}" -f "model","calls","effort","input_fresh","input_cached","cache_write","output"))
 foreach ($r in $models) {
-    [void]$summary.AppendLine(("{0,-30} {1,6} {2,14} {3,14} {4,14} {5,12}" -f `
-        $r.model, $r.api_calls, $r.input_tokens_fresh, $r.cached_input_tokens, $r.cache_write_tokens, $r.output_tokens))
+    [void]$summary.AppendLine(("{0,-30} {1,6} {2,12} {3,14} {4,14} {5,14} {6,12}" -f `
+        $r.model, $r.api_calls, $r.reasoning_effort, $r.input_tokens_fresh, $r.cached_input_tokens, $r.cache_write_tokens, $r.output_tokens))
 }
-[void]$summary.AppendLine(("{0,-30} {1,6} {2,14} {3,14} {4,14} {5,12}" -f `
-    "TOTAL", $totals.api_calls, $totals.input_tokens_fresh, $totals.cached_input_tokens, $totals.cache_write_tokens, $totals.output_tokens))
+[void]$summary.AppendLine(("{0,-30} {1,6} {2,12} {3,14} {4,14} {5,14} {6,12}" -f `
+    "TOTAL", $totals.api_calls, $(Get-EffortSummaryValue -Counts $totals.effort_breakdown), $totals.input_tokens_fresh, $totals.cached_input_tokens, $totals.cache_write_tokens, $totals.output_tokens))
 [void]$summary.AppendLine("Saved: $outPath")
 [Console]::Error.WriteLine($summary.ToString())
 
