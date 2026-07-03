@@ -22,7 +22,7 @@ Produce a GitHub-dark-themed horizontal bar chart of Copilot CLI token usage gro
 Preferred invocation (explicit token-usage path):
 
 ```powershell
-pwsh -NoProfile -File .github/skills/token-usage-chart/Generate-TokenUsageChart.ps1 `
+pwsh -NoProfile -File .\token-usage-chart\Generate-TokenUsageChart.ps1 `
   -TokenUsagePath 'C:\dev\workspace\token-usage'
 ```
 
@@ -83,7 +83,7 @@ $phaseLabelOverrides = @{
 
 ## Rendering Rules
 
-- **Chart type:** Horizontal bar (PowerShell `SeriesChartType::Bar`) — phases on Y axis, tokens on X axis.
+- **Chart type:** Stacked horizontal bar (PowerShell `SeriesChartType::StackedBar`) — phases on Y axis, tokens on X axis.
 - **Sort order:** By numeric phase sequence, with direction configurable for journey storytelling. Current default is reverse journey (`09` → `00`) so the earliest phase appears at the bottom.
 - **X axis:** Token values in Millions (`#,##0,,"M"`), labeled `Total Tokens (Millions)` at the bottom.
 - **Y axis:** Every phase label shown (`AxisX.Interval = 1`, `AxisX.IsLabelAutoFit = $false`). No Y-axis title.
