@@ -16,7 +16,7 @@ Unlike global Copilot plugins, this setup is **fully workspace-specific** and **
 
 Copilot CLI automatically loads hooks from `.github/hooks/` in your repository. 
 
-1. At `sessionEnd`, Copilot CLI executes `.github/hooks/capture-session-tokens.ps1` via the configuration in `.github/hooks/token-counts.json`.
+1. At `sessionEnd`, Copilot CLI executes the capture script declared in `.github/hooks/token-counts.json`. This repository includes both a PowerShell implementation (`capture-session-tokens.ps1`) and an equivalent Bash/Python implementation (`capture-session-tokens.sh`).
 2. The script parses the Copilot process-log telemetry for the session and generates a per-model JSON breakdown matching GitHub's billing and pricing columns:
 
 | Field | Pricing Column | Description |
@@ -40,7 +40,8 @@ copilot-token-counts/
 ├── .github/
 │   └── hooks/
 │       ├── token-counts.json           # declares the sessionEnd hook
-│       └── capture-session-tokens.ps1  # the capture script (self-contained)
+│       ├── capture-session-tokens.ps1  # PowerShell capture script
+│       └── capture-session-tokens.sh   # Bash entrypoint + Python parser
 ├── .gitignore
 ├── LICENSE
 └── README.md
@@ -50,8 +51,41 @@ copilot-token-counts/
 
 To use this in any workspace/repository:
 1. Copy the `.github/hooks/` folder into your repository's root directory.
-2. Ensure you have **PowerShell 7+ (`pwsh`)** on your PATH (the hook invokes `pwsh`).
+2. Ensure the runtime used by your hook configuration is available:
+   - **PowerShell 7+ (`pwsh`)** for `capture-session-tokens.ps1`.
+   - **Bash** plus **Python 3** (or `python`) for `capture-session-tokens.sh`; no `jq` dependency is required.
 3. Run `copilot` normally. Upon exit, your token usage report will be saved to `<workspace>/token-usage/<session-id>.json`, unless a label or session name is available to prefix it.
+
+`token-counts.json` can choose a different command per shell. For example, to use the Bash/Python port for Bash-based Copilot CLI runs:
+
+```json
+{
+  "version": 1,
+  "hooks": {
+    "sessionEnd": [
+      {
+        "type": "command",
+        "powershell": "pwsh -NoProfile -ExecutionPolicy Bypass -File \".github/hooks/capture-session-tokens.ps1\"",
+        "bash": "bash \".github/hooks/capture-session-tokens.sh\"",
+        "timeoutSec": 30
+      }
+    ]
+  }
+}
+```
+
+### Optional Session Start Trace
+
+If you are debugging hook discovery or want a visible trace when a Copilot CLI session starts, add a `sessionStart` prompt hook alongside `sessionEnd` in `.github/hooks/token-counts.json`:
+
+```json
+"sessionStart": [
+  {
+    "type": "prompt",
+    "prompt": "Display exactly this message and nothing else: ==== Copilot CLI session started ======="
+  }
+]
+```
 
 ### Labeled / Named Sessions (e.g., for Workshops)
 
@@ -63,6 +97,17 @@ copilot
 # ...run the step, then exit...
 
 $env:COPILOT_TOKEN_USAGE_LABEL = "02-add-tests"
+copilot
+```
+
+In Bash:
+
+```bash
+export COPILOT_TOKEN_USAGE_LABEL="01-clone-repo"
+copilot
+# ...run the step, then exit...
+
+export COPILOT_TOKEN_USAGE_LABEL="02-add-tests"
 copilot
 ```
 
@@ -88,13 +133,23 @@ To manually generate a report for a past session (or to run backfills):
 pwsh -NoProfile -File .github/hooks/capture-session-tokens.ps1 -SessionId <session-guid> -Json
 ```
 
+Or with the Bash/Python port:
+
+```bash
+bash .github/hooks/capture-session-tokens.sh --session-id <session-guid> --json
+```
+
 ### Script Fingerprint
 
-To quickly check whether two copies of the hook script are the same, print the script's
+To quickly check whether two copies of either hook script are the same, print the script's
 version and a normalized SHA-256 fingerprint:
 
 ```powershell
 pwsh -NoProfile -File .github/hooks/capture-session-tokens.ps1 -Fingerprint
+```
+
+```bash
+bash .github/hooks/capture-session-tokens.sh --fingerprint
 ```
 
 The fingerprint normalizes line endings before hashing, so the same script still compares
@@ -103,7 +158,9 @@ equal when one folder has CRLF and the other has LF.
 ## Requirements
 
 - **GitHub Copilot CLI** with local hook support.
-- **PowerShell 7+ (`pwsh`)** installed on PATH.
+- One supported script runtime:
+  - **PowerShell 7+ (`pwsh`)** for `capture-session-tokens.ps1`.
+  - **Bash** and **Python 3** (or `python`) for `capture-session-tokens.sh`.
 - Access to global logs at `~/.copilot/logs` (or `$env:COPILOT_HOME/logs`).
 
 ## License
