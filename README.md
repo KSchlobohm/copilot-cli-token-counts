@@ -141,19 +141,17 @@ bash .github/hooks/capture-session-tokens.sh --session-id <session-guid> --json
 
 ### Script Fingerprint
 
-To quickly check whether two copies of either hook script are the same, print the script's
-version and a normalized SHA-256 fingerprint:
+After copying the `.github/hooks/` folder from a release tag, use `-Fingerprint` to verify
+that the installed PowerShell script matches the released version:
 
 ```powershell
+# Compare the installed script's output with the fingerprint published for the release tag.
 pwsh -NoProfile -File .github/hooks/capture-session-tokens.ps1 -Fingerprint
 ```
 
-```bash
-bash .github/hooks/capture-session-tokens.sh --fingerprint
-```
-
-The fingerprint normalizes line endings before hashing, so the same script still compares
-equal when one folder has CRLF and the other has LF.
+It emits compact JSON containing `script_version` and `content_sha256`. The content hash
+normalizes line endings before hashing, so it is safe to compare copies stored with CRLF
+or LF line endings.
 
 ## Requirements
 
