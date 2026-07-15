@@ -163,7 +163,7 @@ param(
     [switch]$Fingerprint
 )
 
-$CaptureSessionTokensScriptVersion = "1.2.0"
+$CaptureSessionTokensScriptVersion = "1.2.1"
 
 function Get-NormalizedScriptSha256 {
     param([string]$Path)
@@ -554,20 +554,20 @@ foreach ($row in $byModel.Values) {
 
 $models = @($byModel.Values | Sort-Object { $_.input_tokens_total } -Descending)
 
-function Sum-Key($rows, $key) {
+function Measure-KeyTotal($rows, $key) {
     $s = [long]0
     foreach ($r in $rows) { $s += [long]$r[$key] }
     return $s
 }
 
 $totals = [ordered]@{
-    api_calls           = Sum-Key $models 'api_calls'
-    input_tokens_total  = Sum-Key $models 'input_tokens_total'
-    input_tokens_fresh  = Sum-Key $models 'input_tokens_fresh'
-    cached_input_tokens = Sum-Key $models 'cached_input_tokens'
-    cache_write_tokens  = Sum-Key $models 'cache_write_tokens'
-    output_tokens       = Sum-Key $models 'output_tokens'
-    reasoning_tokens    = Sum-Key $models 'reasoning_tokens'
+    api_calls           = Measure-KeyTotal $models 'api_calls'
+    input_tokens_total  = Measure-KeyTotal $models 'input_tokens_total'
+    input_tokens_fresh  = Measure-KeyTotal $models 'input_tokens_fresh'
+    cached_input_tokens = Measure-KeyTotal $models 'cached_input_tokens'
+    cache_write_tokens  = Measure-KeyTotal $models 'cache_write_tokens'
+    output_tokens       = Measure-KeyTotal $models 'output_tokens'
+    reasoning_tokens    = Measure-KeyTotal $models 'reasoning_tokens'
     effort_breakdown    = $effortBreakdown
 }
 
